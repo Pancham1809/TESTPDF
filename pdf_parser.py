@@ -6,6 +6,17 @@ import sys
 from pathlib import Path
 
 from PyPDF2 import PdfReader
+from PyPDF2.errors import PdfReadError
+
+
+def _open_pdf(pdf_path: str) -> PdfReader:
+    """Open a PDF file and return a PdfReader, with friendly error handling."""
+    try:
+        return PdfReader(pdf_path)
+    except PdfReadError as exc:
+        raise ValueError(f"Failed to read PDF (file may be corrupted): {exc}") from exc
+    except Exception as exc:
+        raise ValueError(f"Unable to open PDF: {exc}") from exc
 
 
 def extract_text(pdf_path: str) -> str:
@@ -16,8 +27,11 @@ def extract_text(pdf_path: str) -> str:
 
     Returns:
         The concatenated text of every page.
+
+    Raises:
+        ValueError: If the PDF cannot be read.
     """
-    reader = PdfReader(pdf_path)
+    reader = _open_pdf(pdf_path)
     pages_text = []
     for page in reader.pages:
         text = page.extract_text()
@@ -34,8 +48,11 @@ def extract_text_by_page(pdf_path: str) -> list[str]:
 
     Returns:
         A list of strings, one per page.
+
+    Raises:
+        ValueError: If the PDF cannot be read.
     """
-    reader = PdfReader(pdf_path)
+    reader = _open_pdf(pdf_path)
     return [page.extract_text() or "" for page in reader.pages]
 
 
@@ -47,8 +64,11 @@ def extract_metadata(pdf_path: str) -> dict:
 
     Returns:
         A dictionary of metadata fields (title, author, subject, etc.).
+
+    Raises:
+        ValueError: If the PDF cannot be read.
     """
-    reader = PdfReader(pdf_path)
+    reader = _open_pdf(pdf_path)
     meta = reader.metadata
     if meta is None:
         return {}
@@ -70,8 +90,11 @@ def get_num_pages(pdf_path: str) -> int:
 
     Returns:
         The page count.
+
+    Raises:
+        ValueError: If the PDF cannot be read.
     """
-    reader = PdfReader(pdf_path)
+    reader = _open_pdf(pdf_path)
     return len(reader.pages)
 
 
@@ -110,6 +133,15 @@ def main() -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    try:
+        _run_command(args)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _run_command(args: argparse.Namespace) -> None:
+    """Execute the requested parsing command."""
     if args.metadata:
         meta = extract_metadata(args.pdf)
         print(json.dumps(meta, indent=2, default=str))
