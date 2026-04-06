@@ -214,51 +214,76 @@ function analyzePDFBuffer(buffer) {
   const fontsSeen = new Set();
 
   // Pattern: /BaseFont /SomeName  or  /BaseFont (SomeName)
-  const baseFontRe = /\/BaseFont\s?\/?([^\s/<>\[\]()]+|\([^)]*\))/g;
+  // Use indexOf-based scanning to avoid ReDoS with regex alternation
+  const BASEFONT_MARKER = "/BaseFont";
+  let searchPos = 0;
   let m;
-  while ((m = baseFontRe.exec(text)) !== null) {
-    let name = m[1].replace(/^\(/, "").replace(/\)$/, "").replace(/^\//, "");
-    if (!fontsSeen.has(name)) {
-      fontsSeen.add(name);
+  while (true) {
+    const idx = text.indexOf(BASEFONT_MARKER, searchPos);
+    if (idx === -1) break;
+    searchPos = idx + BASEFONT_MARKER.length;
 
-      const isSubset = /^[A-Z]{6}\+/.test(name);
-      const baseName = isSubset ? name.replace(/^[A-Z]{6}\+/, "") : name;
+    // Skip optional whitespace (0 or 1 char) and optional leading /
+    let pos = searchPos;
+    if (pos < text.length && (text[pos] === " " || text[pos] === "\t" || text[pos] === "\n" || text[pos] === "\r")) pos++;
+    if (pos < text.length && text[pos] === "/") pos++;
 
-      // Determine type by looking nearby for /Subtype
-      let type = "Unknown";
-      const nearby = text.substring(
-        Math.max(0, m.index - 300),
-        Math.min(text.length, m.index + 300)
-      );
-      if (/\/Subtype\s*\/Type1C?\b/.test(nearby)) type = "Type 1";
-      else if (/\/Subtype\s*\/TrueType\b/.test(nearby)) type = "TrueType";
-      else if (/\/Subtype\s*\/CIDFontType0\b/.test(nearby)) type = "CIDFont (Type 1)";
-      else if (/\/Subtype\s*\/CIDFontType2\b/.test(nearby)) type = "CIDFont (TrueType)";
-      else if (/\/Subtype\s*\/Type3\b/.test(nearby)) type = "Type 3";
-      else if (/\/Subtype\s*\/OpenType\b/.test(nearby)) type = "OpenType";
-      else if (/\/Subtype\s*\/Type0\b/.test(nearby)) type = "Type 0 (Composite)";
-
-      // Encoding
-      let encoding = "Default";
-      const encMatch = nearby.match(/\/Encoding\s*\/?([^\s/<>\[\]]+)/);
-      if (encMatch) encoding = encMatch[1];
-
-      // Embedded?
-      const embedded =
-        /\/FontDescriptor\b/.test(nearby) &&
-        (/\/FontFile\b/.test(nearby) ||
-          /\/FontFile2\b/.test(nearby) ||
-          /\/FontFile3\b/.test(nearby));
-
-      fonts.push({
-        name,
-        baseName,
-        type,
-        encoding,
-        subset: isSubset,
-        embedded,
-      });
+    // Read the font name token
+    let name;
+    if (pos < text.length && text[pos] === "(") {
+      // Parenthesized name
+      const end = text.indexOf(")", pos + 1);
+      if (end === -1) continue;
+      name = text.substring(pos + 1, end);
+    } else {
+      // Regular name token – read until delimiter
+      const start = pos;
+      while (pos < text.length && !/[\s/<>\[\]()]/.test(text[pos])) pos++;
+      if (pos === start) continue;
+      name = text.substring(start, pos);
     }
+
+    name = name.replace(/^\//, "");
+    if (!name || fontsSeen.has(name)) continue;
+    fontsSeen.add(name);
+
+    const isSubset = /^[A-Z]{6}\+/.test(name);
+    const baseName = isSubset ? name.replace(/^[A-Z]{6}\+/, "") : name;
+
+    // Determine type by looking nearby for /Subtype
+    let type = "Unknown";
+    const nearby = text.substring(
+      Math.max(0, idx - 300),
+      Math.min(text.length, idx + 300)
+    );
+    if (/\/Subtype\s*\/Type1C?\b/.test(nearby)) type = "Type 1";
+    else if (/\/Subtype\s*\/TrueType\b/.test(nearby)) type = "TrueType";
+    else if (/\/Subtype\s*\/CIDFontType0\b/.test(nearby)) type = "CIDFont (Type 1)";
+    else if (/\/Subtype\s*\/CIDFontType2\b/.test(nearby)) type = "CIDFont (TrueType)";
+    else if (/\/Subtype\s*\/Type3\b/.test(nearby)) type = "Type 3";
+    else if (/\/Subtype\s*\/OpenType\b/.test(nearby)) type = "OpenType";
+    else if (/\/Subtype\s*\/Type0\b/.test(nearby)) type = "Type 0 (Composite)";
+
+    // Encoding
+    let encoding = "Default";
+    const encMatch = nearby.match(/\/Encoding\s*\/?([^\s/<>\[\]]+)/);
+    if (encMatch) encoding = encMatch[1];
+
+    // Embedded?
+    const embedded =
+      /\/FontDescriptor\b/.test(nearby) &&
+      (/\/FontFile\b/.test(nearby) ||
+        /\/FontFile2\b/.test(nearby) ||
+        /\/FontFile3\b/.test(nearby));
+
+    fonts.push({
+      name,
+      baseName,
+      type,
+      encoding,
+      subset: isSubset,
+      embedded,
+    });
   }
 
   // ---- ICC Profiles --------------------------------------------------------
@@ -272,65 +297,83 @@ function analyzePDFBuffer(buffer) {
     iccRefIds.add(`${m[1]} ${m[2]}`);
   }
 
-  // Scan the *original* (non-decompressed) buffer for stream objects containing ICC data
+  // Scan the *original* (non-decompressed) buffer for stream objects containing ICC data.
+  // Use indexOf-based scanning instead of a single greedy regex to avoid ReDoS.
   const rawText = buffer.toString("latin1");
-  const objHeaderRe = /(\d+) (\d+) obj[\s\S]*?endobj/g;
-  while ((m = objHeaderRe.exec(rawText)) !== null) {
-    const objText = m[0];
-    const objId = `${m[1]} ${m[2]}`;
+  {
+    let objSearch = 0;
+    const OBJ_MARKER = " obj";
+    while (true) {
+      const objIdx = rawText.indexOf(OBJ_MARKER, objSearch);
+      if (objIdx === -1) break;
+      objSearch = objIdx + OBJ_MARKER.length;
 
-    const isICC = iccRefIds.has(objId) || /\/ICCBased/.test(objText);
-    if (!isICC && !/\/N\s+\d/.test(objText)) continue;
-    if (!isICC) continue;
+      // Extract the object number pair before " obj"
+      const lineStart = rawText.lastIndexOf("\n", objIdx);
+      const prefix = rawText.substring(lineStart + 1, objIdx).trim();
+      const idMatch = prefix.match(/^(\d+)\s+(\d+)$/);
+      if (!idMatch) continue;
 
-    // Try to extract and optionally decompress the stream
-    const streamStart = objText.indexOf("stream");
-    if (streamStart === -1) continue;
+      // Find the matching endobj
+      const endIdx = rawText.indexOf("endobj", objSearch);
+      if (endIdx === -1) break;
 
-    let dataStart = streamStart + 6;
-    if (
-      objText.charCodeAt(dataStart) === 0x0d &&
-      objText.charCodeAt(dataStart + 1) === 0x0a
-    )
-      dataStart += 2;
-    else if (
-      objText.charCodeAt(dataStart) === 0x0a ||
-      objText.charCodeAt(dataStart) === 0x0d
-    )
-      dataStart += 1;
+      const objText = rawText.substring(lineStart + 1, endIdx + 6);
+      objSearch = endIdx + 6;
 
-    const endStream = objText.indexOf("endstream", dataStart);
-    if (endStream === -1) continue;
+      const objId = `${idMatch[1]} ${idMatch[2]}`;
+      const isICC = iccRefIds.has(objId) || /\/ICCBased/.test(objText);
+      if (!isICC) continue;
 
-    let raw = Buffer.from(objText.substring(dataStart, endStream), "latin1");
+      // Try to extract and optionally decompress the stream
+      const streamStart = objText.indexOf("stream");
+      if (streamStart === -1) continue;
 
-    // Try decompression if FlateDecode
-    if (/\/Filter\s*(?:\/FlateDecode|\[\s*\/FlateDecode\s*\])/.test(objText)) {
-      try {
-        raw = zlib.inflateSync(raw);
-      } catch {
-        // fall through to try parsing as-is
+      let dataStart = streamStart + 6;
+      if (
+        objText.charCodeAt(dataStart) === 0x0d &&
+        objText.charCodeAt(dataStart + 1) === 0x0a
+      )
+        dataStart += 2;
+      else if (
+        objText.charCodeAt(dataStart) === 0x0a ||
+        objText.charCodeAt(dataStart) === 0x0d
+      )
+        dataStart += 1;
+
+      const endStream = objText.indexOf("endstream", dataStart);
+      if (endStream === -1) continue;
+
+      let raw = Buffer.from(objText.substring(dataStart, endStream), "latin1");
+
+      // Try decompression if FlateDecode
+      if (/\/Filter\s*(?:\/FlateDecode|\[\s*\/FlateDecode\s*\])/.test(objText)) {
+        try {
+          raw = zlib.inflateSync(raw);
+        } catch {
+          // fall through to try parsing as-is
+        }
       }
-    }
 
-    // Check for ICC magic: bytes 36-39 should be 'acsp'
-    if (raw.length >= 128 && sig(raw, 36) === "acsp") {
-      const profile = parseICCProfile(raw);
-      if (profile) {
-        iccProfiles.push(profile);
-        continue;
+      // Check for ICC magic: bytes 36-39 should be 'acsp'
+      if (raw.length >= 128 && sig(raw, 36) === "acsp") {
+        const profile = parseICCProfile(raw);
+        if (profile) {
+          iccProfiles.push(profile);
+          continue;
+        }
       }
-    }
 
-    // If we couldn't parse the profile binary, report what we can from the dict
-    const nMatch = objText.match(/\/N\s+(\d+)/);
-    if (nMatch) {
-      const components = parseInt(nMatch[1], 10);
-      const csMap = { 1: "Grayscale", 3: "RGB", 4: "CMYK" };
-      iccProfiles.push({
-        colorSpace: csMap[components] || `${components}-component`,
-        note: "Profile stream could not be fully parsed",
-      });
+      // If we couldn't parse the profile binary, report what we can from the dict
+      const nMatch = objText.match(/\/N\s+(\d+)/);
+      if (nMatch) {
+        const components = parseInt(nMatch[1], 10);
+        const csMap = { 1: "Grayscale", 3: "RGB", 4: "CMYK" };
+        iccProfiles.push({
+          colorSpace: csMap[components] || `${components}-component`,
+          note: "Profile stream could not be fully parsed",
+        });
+      }
     }
   }
 
@@ -358,18 +401,34 @@ function analyzePDFBuffer(buffer) {
   }
 
   // /DeviceN [ /Color1 /Color2 ... ]
-  const deviceNRe = /\/DeviceN\s?\[([^\]]+)\]/g;
-  while ((m = deviceNRe.exec(text)) !== null) {
-    const names = m[1]
-      .split(/\s+/)
-      .filter((n) => n.startsWith("/"))
-      .map((n) => n.substring(1))
-      .map((n) => decodePDFName(n));
-    for (const name of names) {
-      if (!spotSeen.has(name)) {
-        spotSeen.add(name);
-        spotColors.push({ name, alternateSpace: "DeviceN component" });
+  // Use indexOf-based scanning to avoid ReDoS
+  {
+    const DN_MARKER = "/DeviceN";
+    let dnSearch = 0;
+    while (true) {
+      const dnIdx = text.indexOf(DN_MARKER, dnSearch);
+      if (dnIdx === -1) break;
+      dnSearch = dnIdx + DN_MARKER.length;
+
+      // Find the opening bracket
+      const bracketOpen = text.indexOf("[", dnSearch);
+      if (bracketOpen === -1 || bracketOpen > dnSearch + 5) continue;
+      const bracketClose = text.indexOf("]", bracketOpen + 1);
+      if (bracketClose === -1) continue;
+
+      const content = text.substring(bracketOpen + 1, bracketClose);
+      const names = content
+        .split(/\s+/)
+        .filter((n) => n.startsWith("/"))
+        .map((n) => n.substring(1))
+        .map((n) => decodePDFName(n));
+      for (const name of names) {
+        if (!spotSeen.has(name)) {
+          spotSeen.add(name);
+          spotColors.push({ name, alternateSpace: "DeviceN component" });
+        }
       }
+      dnSearch = bracketClose + 1;
     }
   }
 
