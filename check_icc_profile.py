@@ -63,7 +63,7 @@ def find_icc_profiles(pdf: pikepdf.Pdf) -> list[dict]:
                 objgen = (dest_profile.objgen[0], dest_profile.objgen[1])
                 if objgen not in seen_objgen:
                     seen_objgen.add(objgen)
-                    n = int(intent.get("/N", 0)) if "/N" in intent else None
+                    n = int(intent.get("/N")) if "/N" in intent else None
                     length = len(dest_profile.read_bytes())
                     profiles.append({
                         "source": f"OutputIntent[{idx}]",
