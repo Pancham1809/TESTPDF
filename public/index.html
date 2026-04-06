@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Metadata Analyzer</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #7dd3fc;
+      --success: #4ade80;
+      --warn: #fbbf24;
+      --danger: #f87171;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 960px; margin: 0 auto; padding: 2rem 1rem; }
+    h1 {
+      text-align: center;
+      font-size: 2rem;
+      margin-bottom: .25rem;
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle { text-align: center; color: var(--muted); margin-bottom: 2rem; font-size: .95rem; }
+
+    /* Upload area */
+    .upload-area {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 3rem 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .upload-area:hover, .upload-area.dragover {
+      border-color: var(--accent);
+      background: rgba(56,189,248,.06);
+    }
+    .upload-area input { display: none; }
+    .upload-icon { font-size: 3rem; margin-bottom: .5rem; }
+    .upload-text { color: var(--muted); }
+    .upload-text strong { color: var(--accent); }
+
+    /* Buttons */
+    .btn {
+      display: inline-block;
+      padding: .6rem 1.5rem;
+      border: none;
+      border-radius: 8px;
+      font-size: .95rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background .2s, transform .1s;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: var(--accent); color: #0f172a; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-outline {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    .btn-outline:hover { background: rgba(56,189,248,.1); }
+    .actions { text-align: center; margin: 1.5rem 0; display: flex; gap: .75rem; justify-content: center; flex-wrap: wrap; }
+
+    /* Progress */
+    .progress-bar { display: none; margin: 1rem auto; width: 100%; max-width: 400px; }
+    .progress-bar.active { display: block; }
+    .progress-track {
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      width: 0;
+      transition: width .3s;
+    }
+    .progress-text { text-align: center; font-size: .85rem; color: var(--muted); margin-top: .25rem; }
+
+    /* Error */
+    .error-msg {
+      background: rgba(248,113,113,.1);
+      border: 1px solid var(--danger);
+      color: var(--danger);
+      padding: .75rem 1rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+      display: none;
+    }
+
+    /* Results */
+    #results { display: none; }
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 1.25rem;
+      overflow: hidden;
+    }
+    .section-header {
+      padding: 1rem 1.25rem;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      user-select: none;
+    }
+    .section-header:hover { background: rgba(255,255,255,.03); }
+    .section-header h2 { font-size: 1.1rem; display: flex; align-items: center; gap: .5rem; }
+    .section-header .badge {
+      font-size: .75rem;
+      background: var(--accent);
+      color: #0f172a;
+      padding: .1rem .55rem;
+      border-radius: 99px;
+      font-weight: 700;
+    }
+    .chevron {
+      transition: transform .2s;
+      color: var(--muted);
+      font-size: 1.25rem;
+    }
+    .section.collapsed .chevron { transform: rotate(-90deg); }
+    .section-body { padding: 0 1.25rem 1.25rem; }
+    .section.collapsed .section-body { display: none; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { padding: .5rem .75rem; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; width: 180px; }
+    td { word-break: break-word; }
+    tr:last-child th, tr:last-child td { border-bottom: none; }
+
+    /* Data tables (fonts, pages, etc.) */
+    .data-table { overflow-x: auto; }
+    .data-table table th { width: auto; color: var(--accent); }
+    .data-table table td { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: .85rem; }
+
+    .tag {
+      display: inline-block;
+      padding: .15rem .5rem;
+      border-radius: 4px;
+      font-size: .8rem;
+      font-weight: 600;
+    }
+    .tag-green { background: rgba(74,222,128,.15); color: var(--success); }
+    .tag-yellow { background: rgba(251,191,36,.15); color: var(--warn); }
+    .tag-blue { background: rgba(56,189,248,.15); color: var(--accent); }
+    .tag-red { background: rgba(248,113,113,.15); color: var(--danger); }
+
+    .empty-state { color: var(--muted); font-style: italic; padding: .5rem 0; }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .container { padding: 1rem .5rem; }
+      h1 { font-size: 1.5rem; }
+      th { width: 120px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📄 PDF Metadata Analyzer</h1>
+    <p class="subtitle">Upload a PDF to extract detailed metadata — fonts, ICC profiles, spot colors, and more.</p>
+
+    <!-- Upload -->
+    <div class="upload-area" id="dropZone">
+      <input type="file" id="fileInput" accept=".pdf,application/pdf" />
+      <div class="upload-icon">📎</div>
+      <p class="upload-text">
+        Drag &amp; drop a PDF here or <strong>click to browse</strong>
+      </p>
+      <p id="fileName" style="margin-top:.5rem;color:var(--accent);display:none;"></p>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="analyzeBtn" disabled>Analyze PDF</button>
+      <button class="btn btn-outline" id="resetBtn" style="display:none;">Upload Another</button>
+    </div>
+
+    <div class="progress-bar" id="progressBar">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <p class="progress-text" id="progressText">Uploading…</p>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <!-- Results -->
+    <div id="results"></div>
+  </div>
+
+  <script>
+    const dropZone    = document.getElementById('dropZone');
+    const fileInput   = document.getElementById('fileInput');
+    const fileNameEl  = document.getElementById('fileName');
+    const analyzeBtn  = document.getElementById('analyzeBtn');
+    const resetBtn    = document.getElementById('resetBtn');
+    const progressBar = document.getElementById('progressBar');
+    const progressFill= document.getElementById('progressFill');
+    const progressText= document.getElementById('progressText');
+    const errorMsg    = document.getElementById('errorMsg');
+    const resultsDiv  = document.getElementById('results');
+
+    let selectedFile = null;
+
+    // ---- Drag & Drop -------------------------------------------------------
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files.length) selectFile(fileInput.files[0]); });
+
+    function selectFile(file) {
+      if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+        showError('Please select a valid PDF file.');
+        return;
+      }
+      selectedFile = file;
+      fileNameEl.textContent = `${file.name} (${formatBytes(file.size)})`;
+      fileNameEl.style.display = 'block';
+      analyzeBtn.disabled = false;
+      hideError();
+    }
+
+    // ---- Analyze -----------------------------------------------------------
+    analyzeBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      analyzeBtn.disabled = true;
+      resetBtn.style.display = 'none';
+      resultsDiv.style.display = 'none';
+      hideError();
+      showProgress(0, 'Uploading…');
+
+      const form = new FormData();
+      form.append('pdf', selectedFile);
+
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/analyze');
+
+        xhr.upload.addEventListener('progress', e => {
+          if (e.lengthComputable) showProgress(Math.round((e.loaded / e.total) * 60), 'Uploading…');
+        });
+
+        const response = await new Promise((resolve, reject) => {
+          xhr.onload = () => resolve(xhr);
+          xhr.onerror = () => reject(new Error('Network error'));
+          xhr.send(form);
+          showProgress(70, 'Analyzing PDF…');
+        });
+
+        showProgress(100, 'Done!');
+
+        if (response.status !== 200) {
+          const err = JSON.parse(response.responseText);
+          throw new Error(err.error || 'Server error');
+        }
+
+        const data = JSON.parse(response.responseText);
+        renderResults(data);
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        setTimeout(() => { progressBar.classList.remove('active'); }, 600);
+        resetBtn.style.display = 'inline-block';
+      }
+    });
+
+    resetBtn.addEventListener('click', () => {
+      selectedFile = null;
+      fileInput.value = '';
+      fileNameEl.style.display = 'none';
+      analyzeBtn.disabled = true;
+      resetBtn.style.display = 'none';
+      resultsDiv.style.display = 'none';
+      hideError();
+    });
+
+    // ---- Render Results ----------------------------------------------------
+    function renderResults(data) {
+      resultsDiv.innerHTML = '';
+      resultsDiv.style.display = 'block';
+
+      // File info
+      addSection('📁 File Information', kvTable({
+        'File Name': data.file.name,
+        'File Size': data.file.sizeFormatted,
+        'PDF Version': data.pdfVersion || '—',
+        'Text Content Length': data.textLength != null ? data.textLength.toLocaleString() + ' characters' : '—',
+      }));
+
+      // General metadata
+      if (data.general && !data.general.error) {
+        addSection('📋 Document Metadata', kvTable({
+          'Title': data.general.title || '—',
+          'Author': data.general.author || '—',
+          'Subject': data.general.subject || '—',
+          'Keywords': data.general.keywords || '—',
+          'Creator': data.general.creator || '—',
+          'Producer': data.general.producer || '—',
+          'Creation Date': fmtDate(data.general.creationDate),
+          'Modification Date': fmtDate(data.general.modificationDate),
+          'Page Count': data.general.pageCount,
+        }));
+      }
+
+      // Pages
+      if (data.pages && data.pages.length) {
+        const cols = ['Page', 'Width (pt)', 'Height (pt)', 'Width (in)', 'Height (in)', 'Width (mm)', 'Height (mm)'];
+        const rows = data.pages.map(p => [p.page, p.widthPt, p.heightPt, p.widthIn, p.heightIn, p.widthMm, p.heightMm]);
+        addSection(`📐 Page Dimensions <span class="badge">${data.pages.length}</span>`, dataTable(cols, rows));
+      }
+
+      // Fonts
+      if (data.fonts && data.fonts.length) {
+        const cols = ['Font Name', 'Type', 'Encoding', 'Subset', 'Embedded'];
+        const rows = data.fonts.map(f => [
+          f.baseName,
+          f.type,
+          f.encoding,
+          f.subset ? tag('Yes', 'blue') : 'No',
+          f.embedded ? tag('Yes', 'green') : tag('No', 'red'),
+        ]);
+        addSection(`🔤 Fonts <span class="badge">${data.fonts.length}</span>`, dataTable(cols, rows));
+      } else {
+        addSection('🔤 Fonts', '<p class="empty-state">No fonts detected</p>');
+      }
+
+      // ICC Profiles
+      if (data.iccProfiles && data.iccProfiles.length) {
+        const html = data.iccProfiles.map(p => {
+          const entries = {};
+          if (p.description) entries['Description'] = p.description;
+          if (p.version) entries['Version'] = p.version;
+          entries['Color Space'] = p.colorSpace || '—';
+          if (p.deviceClass) entries['Device Class'] = p.deviceClass;
+          if (p.pcs) entries['PCS'] = p.pcs;
+          if (p.renderingIntent) entries['Rendering Intent'] = p.renderingIntent;
+          if (p.profileSize) entries['Profile Size'] = formatBytes(p.profileSize);
+          if (p.preferredCMM) entries['Preferred CMM'] = p.preferredCMM;
+          if (p.platform) entries['Platform'] = p.platform;
+          if (p.note) entries['Note'] = p.note;
+          return kvTable(entries);
+        }).join('<hr style="border-color:var(--border);margin:1rem 0;">');
+        addSection(`🎨 ICC Profiles <span class="badge">${data.iccProfiles.length}</span>`, html);
+      } else {
+        addSection('🎨 ICC Profiles', '<p class="empty-state">No ICC profiles detected</p>');
+      }
+
+      // Spot Colors
+      if (data.spotColors && data.spotColors.length) {
+        const cols = ['Color Name', 'Alternate Space'];
+        const rows = data.spotColors.map(c => [c.name, c.alternateSpace]);
+        addSection(`🖌️ Spot / Separation Colors <span class="badge">${data.spotColors.length}</span>`, dataTable(cols, rows));
+      } else {
+        addSection('🖌️ Spot / Separation Colors', '<p class="empty-state">No spot colors detected</p>');
+      }
+
+      // Color Spaces
+      if (data.colorSpaces && data.colorSpaces.length) {
+        const tags = data.colorSpaces.map(cs => `<span class="tag tag-blue">${esc(cs)}</span>`).join(' ');
+        addSection('🌈 Color Spaces Used', `<div style="display:flex;flex-wrap:wrap;gap:.5rem;">${tags}</div>`);
+      }
+
+      // Raw Info dict
+      if (data.info && Object.keys(data.info).length) {
+        const cleaned = {};
+        for (const [k, v] of Object.entries(data.info)) {
+          if (v != null && v !== '') cleaned[k] = typeof v === 'object' ? JSON.stringify(v) : v;
+        }
+        if (Object.keys(cleaned).length) {
+          addSection('🗂️ Raw Info Dictionary', kvTable(cleaned));
+        }
+      }
+    }
+
+    function addSection(titleHTML, bodyHTML, collapsed) {
+      const sec = document.createElement('div');
+      sec.className = 'section' + (collapsed ? ' collapsed' : '');
+      sec.innerHTML = `
+        <div class="section-header">
+          <h2>${titleHTML}</h2>
+          <span class="chevron">▼</span>
+        </div>
+        <div class="section-body">${bodyHTML}</div>`;
+      sec.querySelector('.section-header').addEventListener('click', () => sec.classList.toggle('collapsed'));
+      resultsDiv.appendChild(sec);
+    }
+
+    // ---- Table helpers -----------------------------------------------------
+    function kvTable(obj) {
+      const rows = Object.entries(obj).map(([k, v]) =>
+        `<tr><th>${esc(k)}</th><td>${v == null ? '—' : (typeof v === 'string' && v.startsWith('<') ? v : esc(String(v)))}</td></tr>`
+      ).join('');
+      return `<table>${rows}</table>`;
+    }
+
+    function dataTable(cols, rows) {
+      const head = cols.map(c => `<th>${esc(c)}</th>`).join('');
+      const body = rows.map(r =>
+        '<tr>' + r.map(cell => `<td>${typeof cell === 'string' && cell.startsWith('<') ? cell : esc(String(cell))}</td>`).join('') + '</tr>'
+      ).join('');
+      return `<div class="data-table"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function tag(text, color) { return `<span class="tag tag-${color}">${esc(text)}</span>`; }
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function fmtDate(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024, sizes = ['Bytes','KB','MB','GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // ---- Progress & Error helpers ------------------------------------------
+    function showProgress(pct, text) {
+      progressBar.classList.add('active');
+      progressFill.style.width = pct + '%';
+      progressText.textContent = text;
+    }
+    function showError(msg) { errorMsg.textContent = msg; errorMsg.style.display = 'block'; }
+    function hideError() { errorMsg.style.display = 'none'; }
+  </script>
+</body>
+</html>
