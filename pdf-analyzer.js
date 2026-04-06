@@ -199,12 +199,22 @@ function decompressStreams(buffer) {
 function analyzePDFBuffer(buffer) {
   const text = decompressStreams(buffer);
 
+  /**
+   * Decode PDF hex-encoded name tokens (#XX → character).
+   * Does NOT use decodeURIComponent to avoid throwing on invalid sequences.
+   */
+  function decodePDFName(raw) {
+    return raw.replace(/#([0-9A-Fa-f]{2})/g, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16))
+    );
+  }
+
   // ---- Fonts ---------------------------------------------------------------
   const fonts = [];
   const fontsSeen = new Set();
 
   // Pattern: /BaseFont /SomeName  or  /BaseFont (SomeName)
-  const baseFontRe = /\/BaseFont\s*\/?([^\s/<>\[\]()]+|\([^)]*\))/g;
+  const baseFontRe = /\/BaseFont\s?\/?([^\s/<>\[\]()]+|\([^)]*\))/g;
   let m;
   while ((m = baseFontRe.exec(text)) !== null) {
     let name = m[1].replace(/^\(/, "").replace(/\)$/, "").replace(/^\//, "");
@@ -256,16 +266,15 @@ function analyzePDFBuffer(buffer) {
 
   // ICC profiles live inside stream objects whose dictionary contains /N and
   // often /Filter /FlateDecode.  We try to decompress and parse them.
-  const iccStreamRe = /\/ICCBased\s+\d+\s+\d+\s+R/g;
+  const iccStreamRe = /\/ICCBased\s+(\d+)\s+(\d+)\s+R/g;
   const iccRefIds = new Set();
   while ((m = iccStreamRe.exec(text)) !== null) {
-    const ref = m[0].match(/(\d+\s+\d+)\s+R/);
-    if (ref) iccRefIds.add(ref[1]);
+    iccRefIds.add(`${m[1]} ${m[2]}`);
   }
 
   // Scan the *original* (non-decompressed) buffer for stream objects containing ICC data
   const rawText = buffer.toString("latin1");
-  const objHeaderRe = /(\d+)\s+(\d+)\s+obj[\s\S]*?endobj/g;
+  const objHeaderRe = /(\d+) (\d+) obj[\s\S]*?endobj/g;
   while ((m = objHeaderRe.exec(rawText)) !== null) {
     const objText = m[0];
     const objId = `${m[1]} ${m[2]}`;
@@ -332,9 +341,7 @@ function analyzePDFBuffer(buffer) {
   // /Separation /ColorName /AlternateCS ...
   const sepRe = /\/Separation\s*\/([^\s/<>\[\]]+)/g;
   while ((m = sepRe.exec(text)) !== null) {
-    let name = decodeURIComponent(m[1].replace(/#([0-9A-Fa-f]{2})/g, (_, hex) =>
-      String.fromCharCode(parseInt(hex, 16))
-    ));
+    let name = decodePDFName(m[1]);
     if (!spotSeen.has(name)) {
       spotSeen.add(name);
 
@@ -351,17 +358,13 @@ function analyzePDFBuffer(buffer) {
   }
 
   // /DeviceN [ /Color1 /Color2 ... ]
-  const deviceNRe = /\/DeviceN\s*\[\s*([^\]]+)\]/g;
+  const deviceNRe = /\/DeviceN\s?\[([^\]]+)\]/g;
   while ((m = deviceNRe.exec(text)) !== null) {
     const names = m[1]
       .split(/\s+/)
       .filter((n) => n.startsWith("/"))
       .map((n) => n.substring(1))
-      .map((n) =>
-        decodeURIComponent(n.replace(/#([0-9A-Fa-f]{2})/g, (_, hex) =>
-          String.fromCharCode(parseInt(hex, 16))
-        ))
-      );
+      .map((n) => decodePDFName(n));
     for (const name of names) {
       if (!spotSeen.has(name)) {
         spotSeen.add(name);
